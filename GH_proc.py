@@ -7,6 +7,8 @@ from scipy import special, stats
 import numpy as np
 import matplotlib.pyplot as plt
 
+from tqdm import tqdm
+
 import jax.numpy as jnp
 import jax
 
@@ -104,8 +106,58 @@ def reg():
     plt.savefig('figure/syn_data/reg.png')
     plt.show()
 
-
 def HMC(x, y, l, p, omega, num_leapfrog_steps, step_size, num_steps, seed):
+
+    def leapfrog_step(grad, step_size, leapfrog_state):
+        new_theta, m, tlp_grad = leapfrog_state
+        m -= 0.5 * step_size * tlp_grad
+        new_theta = new_theta + step_size *m
+        tlp_grad = grad(x, y, new_theta, l, p, omega)
+        m -= 0.5* step_size * tlp_grad
+        return new_theta, m, tlp_grad
+    
+    def hmc_step(theta, num_lf_steps, step_size, seed):
+        
+        tlp_grad = grad(x,y, theta, l, p, omega) 
+        # import pdb; pdb.set_trace()
+        tlp = logprob(x,y, theta, l, p, omega)
+        m = np.random.multivariate_normal(np.zeros(len(theta)), np.identity(len(theta))*1)
+        energy = 0.5* np.square(m).sum()/1.0 - tlp
+
+        new_theta, new_m = theta, m
+        log_probs = np.zeros(num_lf_steps)
+        for i in tqdm(range(num_lf_steps)):
+            tlp = logprob(x,y, new_theta, l, p, omega)
+            log_probs[i] = tlp
+            new_theta, new_m, tlp_grad = leapfrog_step(grad, step_size, (new_theta, new_m, tlp_grad))
+
+        plt.figure()
+        plt.plot(log_probs)
+        plt.show()
+        import pdb; pdb.set_trace()
+        new_energy = 0.5* np.square(new_m).sum()/1.0 - logprob(x,y, new_theta, l, p, omega)
+        log_accept_ratio = energy - new_energy
+        is_accepted = np.log(np.random.uniform()) < log_accept_ratio
+        # select proposed state if accepted
+        if is_accepted:
+            theta = new_theta
+        return theta, is_accepted, log_accept_ratio
+    
+    # initialize
+    theta = np.array([1.0,2.0,2.0]) # sample from some initial dist?
+    # create a seed for each step
+    seed = jax.random.PRNGKey(seed)
+    seeds = jax.random.split(seed, num_steps)
+    # repeatedly run hmc and accumulate the outputs
+    thetas, is_accepted, log_accept_ratios = np.zeros((num_steps,3)), np.zeros(num_steps), np.zeros(num_steps)
+    
+    for i in tqdm(range(num_steps)):
+        thetas[i,:], is_accepted[i], log_accept_ratios[i] = hmc_step(theta, num_leapfrog_steps, step_size, seed)
+        theta = thetas[i,:]
+
+    return thetas, is_accepted, log_accept_ratios
+
+def HMC_jx(x, y, l, p, omega, num_leapfrog_steps, step_size, num_steps, seed):
 
     def leapfrog_step(grad, step_size, i, leapfrog_state):
         theta, m, tlp_grad = leapfrog_state
@@ -120,7 +172,7 @@ def HMC(x, y, l, p, omega, num_leapfrog_steps, step_size, num_steps, seed):
         m_seed, mh_seed = jax.random.split(seed)
         tlp_grad = grad(x,y, theta, l, p, omega) 
         import pdb;pdb.set_trace()
-        tlp = logprob(x,y, theta, l, p, omega)
+        tlp = logprob_jx(x,y, theta, l, p, omega)
         m = jax.random.normal(m_seed, theta.shape)
         energy = 0.5* jnp.square(m).sum() - tlp
 
@@ -133,7 +185,7 @@ def HMC(x, y, l, p, omega, num_leapfrog_steps, step_size, num_steps, seed):
         #     partial(leapfrog_step, grad, step_size),
         #     (theta, m, tlp_grad)
         # )
-        new_energy = 0.5* jnp.square(new_m).sum() - logprob(x,y, new_theta, l, p, omega)
+        new_energy = 0.5* jnp.square(new_m).sum() - logprob_jx(x,y, new_theta, l, p, omega)
         log_accept_ratio = energy - new_energy
         is_accepted = jnp.log(jax.random.uniform(mh_seed,[])) < log_accept_ratio
         # select proposed state if accepted
@@ -150,7 +202,7 @@ def HMC(x, y, l, p, omega, num_leapfrog_steps, step_size, num_steps, seed):
     seeds = jax.random.split(seed, num_steps)
     # repeatedly run hmc and accumulate the outputs
     for i in range(1):
-        hmc_output = hmc_step(grad, num_leapfrog_steps, step_size, theta, seed)
+        hmc_output = hmc_step(grad_jx, num_leapfrog_steps, step_size, theta, seed)
     # _, hmc_output = jax.lax.scan(partial(hmc_step, grad,num_leapfrog_steps, step_size), theta, seeds)
     return hmc_output
 
@@ -162,6 +214,24 @@ if __name__ == '__main__':
     ids = np.linspace(start=0, stop=N-1, endpoint=False, num=N, dtype=int)
     train_ids = np.random.choice(ids, size=10, replace=False)
     
-    ys = Multivariate_GH_1d(xs)
+    ys = Multivariate_GH_1d(xs, omega=1)
 
-    hmc_output = HMC(xs, ys, l=1, p=1, omega=1, num_leapfrog_steps=100, step_size=0.01, num_steps=50, seed=1700)
+    thetas, is_accepted, log_accept_ratios = HMC(xs, ys, l=1, p=1, omega=1, num_leapfrog_steps=50, step_size=1e-3, num_steps=1, seed=1700)
+    print(thetas, is_accepted, log_accept_ratios)
+
+    plt.figure()
+    plt.subplot(2,2,1)
+    plt.hist(thetas[:,0]) # a_b
+    plt.xlabel('$a_b$')
+    plt.subplot(2,2,2)
+    plt.hist(thetas[:,1]) # v_0
+    plt.xlabel('$v_0$')
+    plt.subplot(2,2,3)
+    plt.hist(thetas[:,2]) # w
+    plt.xlabel('w')
+    plt.subplot(2,2,4)
+    plt.hist(np.exp(log_accept_ratios))
+    plt.xlabel('accept ratio')
+
+    plt.show()
+
