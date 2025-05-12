@@ -15,13 +15,14 @@ import jax
 from tools.tools import *
 from functools import partial
 
-def Multivariate_GH_1d(xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0):
+def Multivariate_GH_1d(xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, k = 1):
     """
     xs: np array, input location
     l: index parameter for GIG
     omega: a, b in GIG
     SE cov: v_0 exp(-w*(x-y)^2/2)
     beta(x) = a_b + b_b *x
+    k: noise variance
     """
     W = stats.geninvgauss.rvs(p=l, b=omega, size=1)[0]
 
@@ -33,12 +34,13 @@ def Multivariate_GH_1d(xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0):
     beta = np.ones(N)*a_b + xs*b_b
 
     # assume zero mean
-    fs = np.random.multivariate_normal(beta*W, K*W)
+    fs = np.random.multivariate_normal(beta*W, (K)*W)
+    ys = fs + np.random.multivariate_normal(beta*0, (k*np.identity(N))*W)
 
-    return fs
+    return fs, ys
 
-def regression(train_xs, train_ys, test_xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0):
-    K11 = SE_cov(train_xs, train_xs, v_0, w)
+def regression(train_xs, train_ys, test_xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, k =1):
+    K11 = SE_cov(train_xs, train_xs, v_0, w) + k*np.identity(len(train_ys))
     K12 = SE_cov(train_xs, test_xs, v_0, w)
     K22 = SE_cov(test_xs, test_xs, v_0, w)
 
@@ -64,7 +66,7 @@ def regression(train_xs, train_ys, test_xs, l = -1, omega = 1, w = 1, v_0 = 1, a
 
     return mean21, var21
 
-def reg_fn():
+def reg_fn(k=1):
     N = 100
     a_b = 0
     # xs = np.random.uniform(0,10, size=100)
@@ -72,36 +74,15 @@ def reg_fn():
     ids = np.linspace(start=0, stop=N-1, endpoint=False, num=N, dtype=int)
     train_ids = np.random.choice(ids, size=10, replace=False)
     
-    ys = Multivariate_GH_1d(xs)
-    mean, var = regression(xs[train_ids], ys[train_ids], xs)
+    fs, ys = Multivariate_GH_1d(xs,k=k)
+    mean, var = regression(xs[train_ids], ys[train_ids], xs, k=k)
     std = np.sqrt(np.diagonal(var))
 
     plt.figure()
-    plt.plot(xs, ys ,label = 'Fn')
-    plt.scatter(xs[train_ids], ys[train_ids], label= 'Train')
-    plt.plot(xs, mean,label ='test')
-    plt.fill_between(xs, y1=mean+3*std, y2=mean -3*std, color='pink', alpha =0.5)
-    plt.legend()
-    plt.savefig('figure/syn_data/reg.png')
-    plt.show()
-
-def reg():
-    N = 100
-    a_b = 0
-    # xs = np.random.uniform(0,10, size=100)
-    xs = np.linspace(start=0, stop=10, endpoint=False, num=100)
-    ids = np.linspace(start=0, stop=N-1, endpoint=False, num=N, dtype=int)
-    train_ids = np.random.choice(ids, size=10, replace=False)
-    
-    ys = Multivariate_GH_1d(xs)
-    mean, var = regression(xs[train_ids], ys[train_ids], xs)
-    std = np.sqrt(np.diagonal(var))
-
-    plt.figure()
-    plt.plot(xs, ys ,label = 'Fn')
-    plt.scatter(xs[train_ids], ys[train_ids], label= 'Train')
-    plt.plot(xs, mean,label ='test')
-    plt.fill_between(xs, y1=mean+3*std, y2=mean -3*std, color='pink', alpha =0.5)
+    plt.fill_between(xs, y1=mean+3*std, y2=mean -3*std, color='pink', alpha =0.5, label='3 std region')
+    plt.plot(xs, fs ,label = 'A sample Fn')
+    plt.plot(xs, mean,label ='Pred Mean')
+    plt.scatter(xs[train_ids], ys[train_ids], label= 'Train', color = 'red')
     plt.legend()
     plt.savefig('figure/syn_data/reg.png')
     plt.show()
@@ -157,35 +138,37 @@ def HMC(x, y, l, p, omega, num_leapfrog_steps, step_size, num_steps, seed):
 
     return thetas, is_accepted, log_accept_ratios
 
-def HMC_jx(x, y, l, p, omega, num_leapfrog_steps, step_size, num_steps, seed):
+def HMC_jx(x, y, l, p, omega, k, num_leapfrog_steps, step_size, num_steps, seed):
 
     def leapfrog_step(grad, step_size, i, leapfrog_state):
         theta, m, tlp_grad = leapfrog_state
+
+        step_size = step_size * 0.95** i
         
         m += 0.5 * step_size * tlp_grad
         theta += step_size *m
-        tlp_grad = grad(x, y, theta, l, p, omega)
+        tlp_grad = grad(x, y, theta, l, p, omega, k)
         m += 0.5* step_size * tlp_grad
+        # jax.debug.print('log prob: {} theta: {}', logprob_jx(x,y, theta, l, p, omega), theta)
         return theta, m, tlp_grad
     
     def hmc_step(grad, num_lf_steps, step_size, theta, seed):
         m_seed, mh_seed = jax.random.split(seed)
-        tlp_grad = grad(x,y, theta, l, p, omega) 
-        import pdb;pdb.set_trace()
-        tlp = logprob_jx(x,y, theta, l, p, omega)
+        tlp_grad = grad(x,y, theta, l, p, omega, k) 
+        tlp = logprob_jx(x,y, theta, l, p, omega, k)
         m = jax.random.normal(m_seed, theta.shape)
         energy = 0.5* jnp.square(m).sum() - tlp
 
+        # jax.debug.print('log prob: {} theta: {}', tlp, theta)
+
         new_theta, new_m = theta, m
-        for i in range(num_lf_steps):
-            new_theta, new_m, _ = leapfrog_step(grad, step_size, i, (new_theta, new_m, tlp_grad))
-        # new_theta, new_m, _ = jax.lax.fori_loop(
-        #     0,
-        #     num_lf_steps,
-        #     partial(leapfrog_step, grad, step_size),
-        #     (theta, m, tlp_grad)
-        # )
-        new_energy = 0.5* jnp.square(new_m).sum() - logprob_jx(x,y, new_theta, l, p, omega)
+        new_theta, new_m, _ = jax.lax.fori_loop(
+            0,
+            num_lf_steps,
+            partial(leapfrog_step, grad, step_size),
+            (theta, m, tlp_grad)
+        )
+        new_energy = 0.5* jnp.square(new_m).sum() - logprob_jx(x,y, new_theta, l, p, omega, k)
         log_accept_ratio = energy - new_energy
         is_accepted = jnp.log(jax.random.uniform(mh_seed,[])) < log_accept_ratio
         # select proposed state if accepted
@@ -196,17 +179,16 @@ def HMC_jx(x, y, l, p, omega, num_leapfrog_steps, step_size, num_steps, seed):
         return theta, hmc_op
     
     # initialize
-    theta = jnp.array([0.0,1.0,1.0]) # sample from some initial dist?
+    # theta = 1.2
+    theta = jnp.array([0.5,1.5,1.5]) # sample from some initial dist?
     # create a seed for each step
-    seed = jax.random.PRNGKey(seed)
+    # seed = jax.random.PRNGKey(seed)
     seeds = jax.random.split(seed, num_steps)
     # repeatedly run hmc and accumulate the outputs
-    for i in range(1):
-        hmc_output = hmc_step(grad_jx, num_leapfrog_steps, step_size, theta, seed)
-    # _, hmc_output = jax.lax.scan(partial(hmc_step, grad,num_leapfrog_steps, step_size), theta, seeds)
+    _, hmc_output = jax.lax.scan(partial(hmc_step, grad_jx,num_leapfrog_steps, step_size), theta, seeds)
     return hmc_output
 
-if __name__ == '__main__':
+def HMC_fn():
     N = 100
     a_b = 0
     # xs = np.random.uniform(0,10, size=100)
@@ -214,9 +196,11 @@ if __name__ == '__main__':
     ids = np.linspace(start=0, stop=N-1, endpoint=False, num=N, dtype=int)
     train_ids = np.random.choice(ids, size=10, replace=False)
     
-    ys = Multivariate_GH_1d(xs, omega=1)
+    fs, ys = Multivariate_GH_1d(xs, omega=1,k=1e-5)
 
-    thetas, is_accepted, log_accept_ratios = HMC(xs, ys, l=1, p=1, omega=1, num_leapfrog_steps=50, step_size=1e-3, num_steps=1, seed=1700)
+    xs = np.array(xs)
+    ys = np.array(ys)
+    thetas, is_accepted, log_accept_ratios = HMC(xs, ys, l=1, p=1, omega=1, num_leapfrog_steps=5, step_size=1e-3, num_steps=3, seed=1700)
     print(thetas, is_accepted, log_accept_ratios)
 
     plt.figure()
@@ -226,12 +210,112 @@ if __name__ == '__main__':
     plt.subplot(2,2,2)
     plt.hist(thetas[:,1]) # v_0
     plt.xlabel('$v_0$')
+    # plt.subplot(2,2,3)
+    # plt.hist(thetas[:,2]) # w
+    # plt.xlabel('w')
     plt.subplot(2,2,3)
-    plt.hist(thetas[:,2]) # w
-    plt.xlabel('w')
-    plt.subplot(2,2,4)
     plt.hist(np.exp(log_accept_ratios))
     plt.xlabel('accept ratio')
 
     plt.show()
+
+def dual_averaging(eps0, target=0.65, M_adapt=100,
+                   gamma=0.01, t0=200.0, kappa=0.9):
+    file = jnp.load('xy.npz')
+    xs = jnp.array(file['x'])
+    ys = jnp.array(file['y'])
+
+    
+
+    mu = jnp.log(10 * eps0)
+    H_bar = 0.0
+    log_eps_bar = 0.0
+    eps = eps0
+
+    eps_n = [jnp.log(eps)]
+    alphas = []
+
+    key = jax.random.PRNGKey(1700)
+    for m in tqdm(range(1, M_adapt+1)):
+        # 1) run one HMC step with current eps, get acceptance α
+        key, subkey = jax.random.split(key)
+        # import pdb;pdb.set_trace()
+        hmc_output = HMC_jx(xs, ys, l=1, p=1, omega=1, num_leapfrog_steps=50, step_size=eps, num_steps=1, seed=subkey)
+        alpha = min(jnp.exp(hmc_output['log_acc_ratio'][0]),1)
+        alphas.append(alpha)
+
+        # 2) update H̄
+        H_bar = (1 - 1/(m + t0)) * H_bar + (1/(m + t0)) * (target - alpha)
+
+        # 3) propose new log-step
+        log_eps = mu - (jnp.sqrt(m)/gamma) * H_bar
+
+        # 4) exponentiate
+        eps = jnp.exp(log_eps)
+
+        # 5) update averaged log-step
+        log_eps_bar = (m**(-kappa)) * log_eps + (1 - m**(-kappa)) * log_eps_bar
+
+        eps_n.append(jnp.log(eps))
+
+    # At end of warmup:
+    eps_star = jnp.exp(log_eps_bar)
+    return eps_star, eps_n, alphas
+
+def HMC_fn_jx():
+    N = 100
+    a_b = 0
+    k=0.1
+    # xs = np.random.uniform(0,10, size=100)
+    # xs = np.linspace(start=0, stop=100, endpoint=False, num=100) # if number too large: cause overflow when calculating bessel fucntion with a large index; too small, overfit..?
+    # ids = np.linspace(start=0, stop=N-1, endpoint=False, num=N, dtype=int)
+    # # train_ids = np.random.choice(ids, size=10, replace=False)
+    
+    # fs, ys = Multivariate_GH_1d(xs, omega=1,k=k)
+    # jnp.savez('xy_k01.npz', x = jnp.array(xs), y = jnp.array(ys))
+
+    file = jnp.load('xy_k01.npz')
+    xs = jnp.array(file['x'])
+    ys = jnp.array(file['y'])
+
+    eps0 = 1e-3
+    seed = 1400
+    num_leapfrog_steps=100
+    num_steps=1100
+    
+    hmc_output = HMC_jx(xs, ys, l=-1, p=len(xs), omega=1, k=k, num_leapfrog_steps=num_leapfrog_steps, step_size=eps0, num_steps=num_steps, seed=jax.random.PRNGKey(seed))
+
+    plt.figure()
+    plt.subplot(2,2,1)
+    plt.hist(np.array(hmc_output['theta'])[100:, 0])
+    plt.xlabel(r'$\beta$')
+    plt.subplot(2,2,2)
+    plt.hist((np.array(hmc_output['theta'])[100:, 1])**2)
+    plt.xlabel(r'$v_0$')
+    plt.subplot(2,2,3)
+    plt.hist((np.array(hmc_output['theta'])[100:, 2])**2)
+    plt.xlabel(r'$w$')
+    plt.subplot(2,2,4)
+    plt.hist(np.exp(np.minimum(np.array(hmc_output['log_acc_ratio']), 0)))
+    plt.xlabel('accept ratio')
+    plt.savefig(f'figure\\para_fitting\\beta_v0_w__seed{seed}_eps1e_3_lf{num_leapfrog_steps}_st{num_steps}.png')
+    plt.show()
+
+
+    # print(hmc_output['theta'], hmc_output['is_accepted'], np.exp(np.array(hmc_output['log_acc_ratio'])))
+
+
+if __name__ == '__main__':
+    # reg_fn(k=1)
+    HMC_fn_jx()
+    # eps_star, eps_n, alphas = dual_averaging(eps0=1e-4)
+    # print(eps_star)
+
+    # plt.figure()
+    # plt.subplot(2,1,1)
+    # plt.plot(eps_n)
+    # plt.subplot(2,1,2)
+    # plt.plot(alphas)
+    # plt.show()
+
 
