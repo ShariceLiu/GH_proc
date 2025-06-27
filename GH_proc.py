@@ -6,6 +6,9 @@
 from scipy import special, stats
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import cm
+
+import pandas as pd
 
 from tqdm import tqdm
 
@@ -15,7 +18,7 @@ import jax
 from tools.tools import *
 from functools import partial
 
-def Multivariate_GH_1d(xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, k = 1):
+def Multivariate_GH_1d(xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, k = 1,mu=-1):
     """
     xs: np array, input location
     l: index parameter for GIG
@@ -23,6 +26,7 @@ def Multivariate_GH_1d(xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, 
     SE cov: v_0 exp(-w*(x-y)^2/2)
     beta(x) = a_b + b_b *x
     k: noise variance
+    mu: mean of gaussian kernel
     """
     W = stats.geninvgauss.rvs(p=l, b=omega, size=1)[0]
 
@@ -34,10 +38,11 @@ def Multivariate_GH_1d(xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, 
     beta = np.ones(N)*a_b + xs*b_b
 
     # assume zero mean
-    fs = np.random.multivariate_normal(beta*W, (K)*W)
+    fs = np.random.multivariate_normal(beta*W + mu, (K)*W)
     ys = fs + np.random.multivariate_normal(beta*0, (k*np.identity(N))*W)
 
     return fs, ys
+
 
 def regression(train_xs, train_ys, test_xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, k =1):
     K11 = SE_cov(train_xs, train_xs, v_0, w) + k*np.identity(len(train_ys))
@@ -58,9 +63,12 @@ def regression(train_xs, train_ys, test_xs, l = -1, omega = 1, w = 1, v_0 = 1, a
     omega21 = gamma21 * delta21
     k21 = np.sqrt(delta21/ gamma21)
 
-    EW = special.kn(l21+1, omega21)/special.kn(l21, omega21)
-    VarW = special.kn(l21+2, omega21)/special.kn(l21, omega21)\
-            -(special.kn(l21+1,  omega21)/special.kn(l21, omega21))**2
+    # EW = special.kn(l21+1, omega21)/special.kn(l21, omega21)
+    EW = np.exp(log_kn_large_order(l21+1,  omega21) - log_kn_large_order(l21, omega21))
+    # VarW = special.kn(l21+2, omega21)/special.kn(l21, omega21)\
+    #         -(special.kn(l21+1,  omega21)/special.kn(l21, omega21))**2
+    VarW = np.exp(log_kn_large_order(l21+2,  omega21) - log_kn_large_order(l21, omega21))\
+            - EW**2
     mean21 = mu21 + EW*beta21
     var21 =  EW* K221 + VarW * np.outer(beta21, beta21)
 
@@ -159,7 +167,7 @@ def HMC_jx(x, y, l, p, omega, k, num_leapfrog_steps, step_size, num_steps, seed)
         m = jax.random.normal(m_seed, theta.shape)
         energy = 0.5* jnp.square(m).sum() - tlp
 
-        # jax.debug.print('log prob: {} theta: {}', tlp, theta)
+        jax.debug.print('log prob: {} theta: {}', tlp, theta)
 
         new_theta, new_m = theta, m
         new_theta, new_m, _ = jax.lax.fori_loop(
@@ -180,7 +188,7 @@ def HMC_jx(x, y, l, p, omega, k, num_leapfrog_steps, step_size, num_steps, seed)
     
     # initialize
     # theta = 1.2
-    theta = jnp.array([0.5,1.5,1.5]) # sample from some initial dist?
+    theta = jnp.array([0.0, 1.5, 1.5, 0.5, 0.0]) # sample from some initial dist?
     # create a seed for each step
     # seed = jax.random.PRNGKey(seed)
     seeds = jax.random.split(seed, num_steps)
@@ -219,97 +227,272 @@ def HMC_fn():
 
     plt.show()
 
-def dual_averaging(eps0, target=0.65, M_adapt=100,
-                   gamma=0.01, t0=200.0, kappa=0.9):
-    file = jnp.load('xy.npz')
-    xs = jnp.array(file['x'])
-    ys = jnp.array(file['y'])
+def HMC_fn_jx(xs, ys, k=0.1, save = True, simulation = False, seed = jax.random.PRNGKey(1400), eps0 = 1e-3,num_leapfrog_steps=100,
+    num_steps=1100, burn_in = 100):
+    if simulation:
+        N = 200
+        a_b = 0
+        k=0.1
+        # xs = np.random.uniform(0,10, size=100)
+        # xs = np.linspace(start=0, stop=100, endpoint=False, num=100) # if number too large: cause overflow when calculating bessel fucntion with a large index; too small, overfit..?
+        
+        # fs, ys = Multivariate_GH_1d(xs, omega=1,k=k)
+        # jnp.savez('xy_k01.npz', x = jnp.array(xs), y = jnp.array(ys))
+
+        file = jnp.load(f'xy_k01_N{N}.npz')
+        xs = jnp.array(file['x'])
+        ys = jnp.array(file['y'])
 
     
+    hmc_output = HMC_jx(xs, ys, l=-1, p=len(xs), omega=1, k=k, num_leapfrog_steps=num_leapfrog_steps, step_size=eps0, num_steps=num_steps, seed=seed)
 
-    mu = jnp.log(10 * eps0)
-    H_bar = 0.0
-    log_eps_bar = 0.0
-    eps = eps0
+    plt.figure()
+    plt.subplot(3,2,1)
+    plt.plot(np.array(hmc_output['theta'])[burn_in:, 0])
+    plt.xlabel(r'$\beta$')
+    plt.subplot(3,2,2)
+    plt.plot((np.array(hmc_output['theta'])[burn_in:, 1])**2)
+    plt.xlabel(r'$v_0$')
+    plt.subplot(3,2,3)
+    plt.plot((np.array(hmc_output['theta'])[burn_in:, 2])**2)
+    plt.xlabel(r'$w$')
+    plt.subplot(3,2,4)
+    plt.plot((np.array(hmc_output['theta'])[burn_in:, 3])**2)
+    plt.xlabel(r'$k$')
+    plt.subplot(3,2,5)
+    plt.plot((np.array(hmc_output['theta'])[burn_in:, 4]))
+    plt.xlabel(r'$\mu$')
+    # plt.subplot(3,2,6)
+    # plt.plot((np.array(hmc_output['theta'])[burn_in:, 5])**2)
+    # plt.xlabel(r'$k$')
+    if save:
+        plt.savefig(f'figure\\para_fitting\\beta_v0_w_mu_seed{seed}_eps1e_3_lf{num_leapfrog_steps}_st{num_steps}.png')
 
-    eps_n = [jnp.log(eps)]
-    alphas = []
 
-    key = jax.random.PRNGKey(1700)
-    for m in tqdm(range(1, M_adapt+1)):
-        # 1) run one HMC step with current eps, get acceptance α
-        key, subkey = jax.random.split(key)
-        # import pdb;pdb.set_trace()
-        hmc_output = HMC_jx(xs, ys, l=1, p=1, omega=1, num_leapfrog_steps=50, step_size=eps, num_steps=1, seed=subkey)
-        alpha = min(jnp.exp(hmc_output['log_acc_ratio'][0]),1)
-        alphas.append(alpha)
+    plt.figure()
+    plt.hist(np.exp(np.minimum(np.array(hmc_output['log_acc_ratio']), 0)))
+    plt.xlabel('accept ratio')
+    if save:
+        plt.savefig(f'figure\\para_fitting\\acc_beta_v0_w_mu_seed{seed}_eps1e_3_lf{num_leapfrog_steps}_st{num_steps}.png')
+    plt.show()
 
-        # 2) update H̄
-        H_bar = (1 - 1/(m + t0)) * H_bar + (1/(m + t0)) * (target - alpha)
+    return np.array(hmc_output['theta'])[100:, 0].mean(axis=0)
+    # print(hmc_output['theta'], hmc_output['is_accepted'], np.exp(np.array(hmc_output['log_acc_ratio'])))
 
-        # 3) propose new log-step
-        log_eps = mu - (jnp.sqrt(m)/gamma) * H_bar
-
-        # 4) exponentiate
-        eps = jnp.exp(log_eps)
-
-        # 5) update averaged log-step
-        log_eps_bar = (m**(-kappa)) * log_eps + (1 - m**(-kappa)) * log_eps_bar
-
-        eps_n.append(jnp.log(eps))
-
-    # At end of warmup:
-    eps_star = jnp.exp(log_eps_bar)
-    return eps_star, eps_n, alphas
-
-def HMC_fn_jx():
-    N = 100
-    a_b = 0
+def likelihood_grid(N=500):
+    # generate data
     k=0.1
-    # xs = np.random.uniform(0,10, size=100)
-    # xs = np.linspace(start=0, stop=100, endpoint=False, num=100) # if number too large: cause overflow when calculating bessel fucntion with a large index; too small, overfit..?
-    # ids = np.linspace(start=0, stop=N-1, endpoint=False, num=N, dtype=int)
-    # # train_ids = np.random.choice(ids, size=10, replace=False)
-    
-    # fs, ys = Multivariate_GH_1d(xs, omega=1,k=k)
-    # jnp.savez('xy_k01.npz', x = jnp.array(xs), y = jnp.array(ys))
+    a_b = 1
 
-    file = jnp.load('xy_k01.npz')
-    xs = jnp.array(file['x'])
-    ys = jnp.array(file['y'])
+    xs = np.linspace(start=0, stop=100, endpoint=False, num=N)
+    fs, ys = Multivariate_GH_1d(xs, omega=1,k=k)
 
-    eps0 = 1e-3
-    seed = 1400
-    num_leapfrog_steps=100
-    num_steps=1100
+    np.savez(f'xy_k01_N{N}.npz', x = np.array(xs), y = np.array(ys))
+
+    file = np.load(f'xy_k01_N{N}.npz')
+    xs = np.array(file['x'])
+    ys = np.array(file['y'])
+
     
-    hmc_output = HMC_jx(xs, ys, l=-1, p=len(xs), omega=1, k=k, num_leapfrog_steps=num_leapfrog_steps, step_size=eps0, num_steps=num_steps, seed=jax.random.PRNGKey(seed))
+    # grid
+    n = 20
+    
+    a_bs = np.linspace(0,2,num=n)
+    v_0_sqs = np.linspace(0.5,2,num=n)
+    wl_sqs = np.linspace(0.5,2,num=n)
+    ks = np.linspace(0.01, 0.2, num=n)
+    mus = np.linspace(-2,0,num=n)
+    l_sqs, omega_sqs = -np.linspace(0.1,10,num=n), np.linspace(0.1,10,num=n), 
+
+    list_paras = [r'$a_b$',r'$v_0$',r'$w_l$', r'k',r'$mu$', r'$l$',  r'$omega$']
+    list_ns = [a_bs, v_0_sqs, wl_sqs, ks, mus, l_sqs, omega_sqs]
+
+    mls = [0,4]
+
+    for m in mls:
+        for l in mls:
+            if l<=m:
+                continue
+            likelihoods = np.zeros((n,n))
+            X, Y =np.meshgrid(list_ns[m], list_ns[l])
+        
+            for i, (row_x , row_y) in enumerate(zip(X, Y)):
+                for j, (x , y) in enumerate(zip(row_x, row_y)):
+                    theta = np.array([1.0, 1.0, 1.0, 0.1, -1.0, -1.0, 1.0])
+                    theta[m] = x
+                    theta[l] = y
+                    likelihoods[i,j] = (logprob(xs, ys, theta, l=-1, p=len(xs), omega=1))
+
+            # import pdb; pdb.set_trace()
+            idx = np.argmax(likelihoods)
+            idx = np.unravel_index(idx, likelihoods.shape)
+            print(X[idx], Y[idx])
+            fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+            surf = ax.plot_surface(X, Y, likelihoods, cmap=cm.coolwarm,
+                            linewidth=0, antialiased=False)
+            ax.set_xlabel(list_paras[m])
+            ax.set_ylabel(list_paras[l])
+            plt.savefig(f'figure/para_fitting/like_plot/{list_paras[m]}{list_paras[l]}.png')
+    plt.show()
+
+    return
+    # bivariate plot
+    a_v_likelihoods = np.zeros((n,n))
+    A, V = np.meshgrid(a_bs, v_0_sqs)
+    for i, (row_a_b , row_v_0_sq) in enumerate(zip(A, V)):
+        for j, (a_b , v_0_sq) in enumerate(zip(row_a_b, row_v_0_sq)):
+            a_v_likelihoods[i,j] = logprob(xs,ys, [a_b, v_0_sq, 1.0], l=-1, p=len(xs), omega=1, k=k)
+    
+    # plt.figure()
+    # plt.contourf(A, V**2,a_v_likelihoods )
+    # plt.xlabel(r'$a_b$')
+    # plt.ylabel(r'$v_0$')
+    # plt.colorbar()
+    fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+    surf = ax.plot_surface(A, V**2, a_v_likelihoods, cmap=cm.coolwarm,
+                       linewidth=0, antialiased=False)
+    ax.set_xlabel(r'$a_b$')
+    ax.set_ylabel(r'$v_0$')
+    
+    plt.savefig('figure/para_fitting/like_plot/av.png')
+
+    # bivariate plot
+    a_w_likelihoods = np.zeros((n,n))
+    A, W = np.meshgrid(a_bs, wl_sqs)
+    for i, (row_a_b , row_wl_sq) in enumerate(zip(A, W)):
+        for j, (a_b , wl_sq) in enumerate(zip(row_a_b, row_wl_sq)):
+            a_w_likelihoods[i,j] = logprob(xs,ys, [a_b, 1.0, wl_sq], l=-1, p=len(xs), omega=1, k=k)
+    
+    fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+    surf = ax.plot_surface(A, W**2, a_w_likelihoods, cmap=cm.coolwarm,
+                       linewidth=0, antialiased=False)
+    ax.set_xlabel(r'$a_b$')
+    ax.set_ylabel(r'$w$')
+    plt.savefig('figure/para_fitting/like_plot/aw.png')
+
+    # bivariate plot
+    w_v_likelihoods = np.zeros((n,n))
+    W, V = np.meshgrid(wl_sqs, v_0_sqs)
+    for i, (row_wl , row_v_0_sq) in enumerate(zip(W, V)):
+        for j, (wl , v_0_sq) in enumerate(zip(row_wl, row_v_0_sq)):
+            w_v_likelihoods[i,j] = logprob(xs,ys, [1.0, v_0_sq, wl], l=-1, p=len(xs), omega=1, k=k)
+    
+    fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+    surf = ax.plot_surface(W**2, V**2, w_v_likelihoods, cmap=cm.coolwarm,
+                       linewidth=0, antialiased=False)
+    ax.set_xlabel(r'$w$')
+    ax.set_ylabel(r'$v_0$')
+    plt.savefig('figure/para_fitting/like_plot/wv.png')
+
+    plt.show()
+    return
+
+def inf_finance(k=0.01, seed = 1400):
+    csvfile = r"C:\Users\95414\Desktop\CUED\phd\year1\mycode\data\data\NVIDIA CORPORATION (01-23-2025 09.30 _ 01-29-2025 16.00).csv"
+    nvda_data_reloaded= pd.read_csv(csvfile, index_col=0, parse_dates=True)
+    x_ns = jnp.array(nvda_data_reloaded['Price']['2025-01-29'], dtype=jnp.float32)
+    x_ns = (x_ns - x_ns[0])
+    ys = jnp.flip(x_ns)[:300] # pick the prev 300 data for const mu
+    N = len(ys)
+    xs = jnp.linspace(0, N,endpoint=False,num=N)
+    
+    ids = jnp.linspace(start=0, stop=N, endpoint=False, num=N, dtype=int)
+    seed = jax.random.PRNGKey(seed)
+    rc_seed, seed = jax.random.split(seed)
+    train_ids = jax.random.choice(rc_seed, ids, shape=(1,200), replace=False).flatten()
+
+    # beta, v0, w = HMC_fn_jx(xs = xs[train_ids], ys = ys[train_ids], k=k,save=False, seed= seed, eps0=2.5e-4,num_leapfrog_steps=100, num_steps=1100, burn_in=100)
+    # print(beta, v0, w)
+
+    beta,v0, w = 0.25, 0.1, 0.1
+
+    mean, var = regression(xs[train_ids], ys[train_ids], xs, a_b=beta, v_0=v0, w=w,  k=k)
+    std = np.sqrt(np.diagonal(var))
+
+    plt.figure()
+    
+    plt.plot(xs, mean,label ='Pred Mean',zorder=1)
+    plt.plot(xs, ys ,label = 'True', zorder=2)
+    
+    plt.fill_between(xs, y1=mean+3*std, y2=mean -3*std, color='pink', alpha =0.5, label='3 std region')
+    plt.scatter(xs[train_ids], ys[train_ids], label= 'Train', color = 'red', s=4, zorder=10)
+    
+    plt.legend()
+    plt.savefig('figure/nvidia/reg_k001.png')
+    plt.show()
+
+def MH(xs, ys, k=0.1, save = True, simulation = False, eps0 = 1e-3,
+    num_steps=1100, burn_in = 100, sigma = 1.5, suffix = ""):
+    if simulation:
+        N = 100
+        a_b = 0
+        k=0.1
+        # xs = np.random.uniform(0,10, size=100)
+        # xs = np.linspace(start=0, stop=100, endpoint=False, num=100) # if number too large: cause overflow when calculating bessel fucntion with a large index; too small, overfit..?
+        # ids = np.linspace(start=0, stop=N-1, endpoint=False, num=N, dtype=int)
+        # # train_ids = np.random.choice(ids, size=10, replace=False)
+        
+        # fs, ys = Multivariate_GH_1d(xs, omega=1,k=k)
+        # jnp.savez('xy_k01.npz', x = jnp.array(xs), y = jnp.array(ys))
+
+        file = np.load('xy_k01.npz')
+        xs = np.array(file['x'])
+        ys = np.array(file['y'])
+
+    samples = np.zeros((num_steps, 4))
+    log_acc = np.zeros(num_steps)
+    # ini = np.array([0.5, 1.5, 1.5, 0.5])
+    ini = np.array([0.0, 2.0, 2.0, 1.0])
+    var = sigma**2 * np.identity(4)
+    var[-1]/= 3
+    for i in tqdm(range(num_steps)):
+        # propose
+        x =np.random.multivariate_normal(np.array([0.0,1.5,1.5, 0.9]), var)
+        x[1:] = x[1:]**2
+
+        # draw a uniform rv
+        p = np.random.uniform()
+
+        # acceptance rate
+        log_a = logprob(xs, ys, x, l=-1, p=len(xs), omega=1) - logprob(xs, ys, ini, l=-1, p=len(xs), omega=1)
+        if log_a == np.inf:
+            continue
+        log_acc[i] = min(0,log_a)
+        if np.log(p) < log_a:
+            ini = x # accept
+
+        samples[i] = ini
 
     plt.figure()
     plt.subplot(2,2,1)
-    plt.hist(np.array(hmc_output['theta'])[100:, 0])
-    plt.xlabel(r'$\beta$')
+    plt.hist(samples[burn_in:, 0])
     plt.subplot(2,2,2)
-    plt.hist((np.array(hmc_output['theta'])[100:, 1])**2)
-    plt.xlabel(r'$v_0$')
+    plt.hist(samples[burn_in:, 1])
     plt.subplot(2,2,3)
-    plt.hist((np.array(hmc_output['theta'])[100:, 2])**2)
-    plt.xlabel(r'$w$')
+    plt.hist(samples[burn_in:, 2])
     plt.subplot(2,2,4)
-    plt.hist(np.exp(np.minimum(np.array(hmc_output['log_acc_ratio']), 0)))
-    plt.xlabel('accept ratio')
-    plt.savefig(f'figure\\para_fitting\\beta_v0_w__seed{seed}_eps1e_3_lf{num_leapfrog_steps}_st{num_steps}.png')
+    plt.hist(samples[burn_in:, 3])
+    plt.savefig(f'figure/para_fitting/MH/para{suffix}.png')
+
+    plt.figure()
+    plt.hist(np.exp(log_acc))
+    plt.savefig(f'figure/para_fitting/MH/acc{suffix}.png')
     plt.show()
+    
 
 
-    # print(hmc_output['theta'], hmc_output['is_accepted'], np.exp(np.array(hmc_output['log_acc_ratio'])))
 
+    
 
 if __name__ == '__main__':
     # reg_fn(k=1)
-    HMC_fn_jx()
+    HMC_fn_jx(0,0,simulation=True, save=False, num_leapfrog_steps=50, eps0=1e-3, num_steps=100, burn_in=10)
+    # MH(0,0, simulation=True, num_steps=3000, burn_in=200)
+    # inf_finance()
     # eps_star, eps_n, alphas = dual_averaging(eps0=1e-4)
     # print(eps_star)
+
+    # likelihood_grid(N=200)
 
     # plt.figure()
     # plt.subplot(2,1,1)

@@ -10,6 +10,8 @@ import jax
 
 from functools import partial
 
+from tools.tools import *
+
 def logprob_G(x):
     return -jnp.log(2*jnp.pi)/2 - x**2/2
 
@@ -81,4 +83,8 @@ def HMC_fn_jx():
     plt.show()
 
 if __name__ == '__main__':
-    HMC_fn_jx()
+    xs = jnp.linspace(start=0, stop=100, endpoint=False, num=100)
+    K= SE_cov_jnp(xs, xs, 1.0, w=1.0)
+    from jax.numpy.linalg import eigvalsh, det
+    ev = eigvalsh(K)
+    jax.debug.print('ev:{}, det:{}', ev, jax.numpy.log(det(K)))
