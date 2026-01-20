@@ -10,7 +10,7 @@ import jax
 
 from tools.tools import *
 from functools import partial
-
+from matplotlib import cm
 import pandas as pd
 
 def Multivariate_ST_1d(xs, v = 3,  w = 1, v_0 = 1, k = 1):
@@ -32,6 +32,8 @@ def Multivariate_ST_1d(xs, v = 3,  w = 1, v_0 = 1, k = 1):
     # assume zero mean
     fs = np.random.multivariate_normal(np.zeros(N), W*K)
     ys = fs + np.random.multivariate_normal(np.zeros(N), W*k*np.identity(N))
+
+    np.savez('xy_k01_st.npz',x=jnp.array(xs), y = jnp.array(ys))
 
     return fs, ys
 
@@ -152,13 +154,13 @@ def HMC_fn_jx(xs, ys, k=0.1, save = True, simulation = False, seed = jax.random.
     vs = (np.array(hmc_output['theta'])[burn_in:, 0])**2 + 2
     v0s = (np.array(hmc_output['theta'])[burn_in:, 1])**2
     ws = (np.array(hmc_output['theta'])[burn_in:, 2])**2
-    plt.hist(vs)
+    plt.plot(vs)
     plt.xlabel(r'$v$')
     plt.subplot(2,2,2)
-    plt.hist(v0s)
+    plt.plot(v0s)
     plt.xlabel(r'$v_0$')
     plt.subplot(2,2,3)
-    plt.hist(ws)
+    plt.plot(ws)
     plt.xlabel(r'$w$')
     print( vs.mean(), v0s.mean(), ws.mean() )
     # plt.subplot(2,2,4)
@@ -178,7 +180,17 @@ def HMC_fn_jx(xs, ys, k=0.1, save = True, simulation = False, seed = jax.random.
     plt.plot(np.array(hmc_output['log_like']))
     if save:
         plt.savefig(f'figure\\parafitting_st\\loglike_seed{seed}_eps1e_3_lf{num_leapfrog_steps}_st{num_steps}.png')
+
+    # autocorrelation
+    s = pd.Series(np.array(hmc_output['theta'])[:, 0])
+    lags = np.arange(int(num_steps))
+    acf = [s.autocorr(lag=i) for i in lags]
+    plt.figure()
+    plt.plot(lags, acf)
+    if save:
+        plt.savefig(f'figure\\parafitting_st\\acf_seed{seed}.png')
     plt.show()
+
 
     return vs.mean(), v0s.mean(), ws.mean()
 
@@ -235,11 +247,77 @@ def inf_finance(k=0.01, seed = 1400):
     plt.savefig('figure/nvidia/st_reg_k001.png')
     plt.show()
 
+def likelihood_grid(xs, ys):
+    # generate data
+    k=0.1
+    # a_b = 1
+
+    # xs = np.linspace(start=0, stop=100, endpoint=False, num=N)
+    # fs, ys = Multivariate_ST_1d(xs,k=k)
+
+    # np.savez(f'xy_k01_st.npz', x = np.array(xs), y = np.array(ys))
+
+    # file = np.load(f'xy_k01_st.npz')
+    # xs = np.array(file['x'])
+    # ys = np.array(file['y'])
+
     
+    # grid
+    n = 20
+    
+    vs = np.linspace(2.5,4,num=n)
+    v_0_sqs = np.linspace(0.5,2,num=n)
+    wl_sqs = np.linspace(0.5,2,num=n)
+    ks = np.linspace(0.5, 2, num=n)*k
+
+    list_paras = [r'$v$',r'$v_0$',r'$w$', r'k']
+    list_ns = [vs, v_0_sqs, wl_sqs, ks]
+
+    mls = [0,1,2,3]
+
+    for m in mls:
+        for l in mls:
+            if l<=m:
+                continue
+            likelihoods = np.zeros((n,n))
+            X, Y =np.meshgrid(list_ns[m], list_ns[l])
+        
+            for i, (row_x , row_y) in enumerate(zip(X, Y)):
+                for j, (x , y) in enumerate(zip(row_x, row_y)):
+                    theta = np.array([3.0, 1.0, 1.0, k])
+                    theta[m] = x
+                    theta[l] = y
+                    likelihoods[i,j] = (logprob_st(xs, ys, theta,n=N))
+
+            # import pdb; pdb.set_trace()
+            idx = np.argmax(likelihoods)
+            idx = np.unravel_index(idx, likelihoods.shape)
+            print(list_paras[m], X[idx], list_paras[l], Y[idx])
+            fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+            surf = ax.plot_surface(X, Y, likelihoods, cmap=cm.coolwarm,
+                            linewidth=0, antialiased=False)
+            ax.set_xlabel(list_paras[m])
+            ax.set_ylabel(list_paras[l])
+            plt.savefig(f'figure/parafitting_st/like_plot/{list_paras[m]}{list_paras[l]}.png')
+    plt.show()
+
+    return    
 
 
 
 if __name__ == '__main__':
+    N = 100
+    xs = np.linspace(start=0, stop=10, endpoint=False, num=100)
+    # ids = np.linspace(start=0, stop=N-1, endpoint=False, num=N, dtype=int)
+    # train_ids = np.random.choice(ids, size=80, replace=False)
+    fs, ys = Multivariate_ST_1d(xs, k=0.1)
+
+    likelihood_grid(xs, ys)
+
     # reg_fn(k=1e-1)
-    # HMC_fn_jx(save=True)
-    inf_finance()
+    file = jnp.load('xy_k01_st.npz')
+    xs = jnp.array(file['x'])
+    ys = jnp.array(file['y'])
+    HMC_fn_jx(xs, ys, simulation=True, save=True)
+    # inf_finance()
+    

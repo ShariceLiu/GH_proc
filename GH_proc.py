@@ -18,7 +18,7 @@ import jax
 from tools.tools import *
 from functools import partial
 
-def Multivariate_GH_1d(xs, l = -1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, k = 1,mu=-1):
+def Multivariate_GH_1d(xs, l = 1, omega = 1, w = 1, v_0 = 1, a_b = 1, b_b = 0, k = 1,mu=-1):
     """
     xs: np array, input location
     l: index parameter for GIG
@@ -297,17 +297,18 @@ def likelihood_grid(N=500):
     # grid
     n = 20
     
-    a_bs = np.linspace(0,2,num=n)
+    a_bs = np.linspace(0,2,num=n)*a_b
     v_0_sqs = np.linspace(0.5,2,num=n)
     wl_sqs = np.linspace(0.5,2,num=n)
     ks = np.linspace(0.01, 0.2, num=n)
     mus = np.linspace(-2,0,num=n)
-    l_sqs, omega_sqs = -np.linspace(0.1,10,num=n), np.linspace(0.1,10,num=n), 
+    l_sqs, omega_sqs = 10**np.linspace(-1,1,num=n), 10**np.linspace(-1,1,num=n), 
 
     list_paras = [r'$a_b$',r'$v_0$',r'$w_l$', r'k',r'$mu$', r'$l$',  r'$omega$']
     list_ns = [a_bs, v_0_sqs, wl_sqs, ks, mus, l_sqs, omega_sqs]
 
-    mls = [0,4]
+    # mls = [0,1,2,3,4,5,6]
+    mls=[5,6]
 
     for m in mls:
         for l in mls:
@@ -318,15 +319,15 @@ def likelihood_grid(N=500):
         
             for i, (row_x , row_y) in enumerate(zip(X, Y)):
                 for j, (x , y) in enumerate(zip(row_x, row_y)):
-                    theta = np.array([1.0, 1.0, 1.0, 0.1, -1.0, -1.0, 1.0])
+                    theta = np.array([a_b, 1.0, 1.0, k, -1.0, 1.0, 1.0])
                     theta[m] = x
                     theta[l] = y
-                    likelihoods[i,j] = (logprob(xs, ys, theta, l=-1, p=len(xs), omega=1))
+                    likelihoods[i,j] = (logprob(xs, ys, theta, l=theta[-2], p=len(xs), omega=theta[-1]))
 
             # import pdb; pdb.set_trace()
             idx = np.argmax(likelihoods)
             idx = np.unravel_index(idx, likelihoods.shape)
-            print(X[idx], Y[idx])
+            print(list_paras[m], X[idx], list_paras[l], Y[idx])
             fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
             surf = ax.plot_surface(X, Y, likelihoods, cmap=cm.coolwarm,
                             linewidth=0, antialiased=False)
@@ -486,13 +487,13 @@ def MH(xs, ys, k=0.1, save = True, simulation = False, eps0 = 1e-3,
 
 if __name__ == '__main__':
     # reg_fn(k=1)
-    HMC_fn_jx(0,0,simulation=True, save=False, num_leapfrog_steps=50, eps0=1e-3, num_steps=100, burn_in=10)
+    # HMC_fn_jx(0,0,simulation=True, save=False, num_leapfrog_steps=50, eps0=1e-3, num_steps=100, burn_in=10)
     # MH(0,0, simulation=True, num_steps=3000, burn_in=200)
     # inf_finance()
     # eps_star, eps_n, alphas = dual_averaging(eps0=1e-4)
     # print(eps_star)
 
-    # likelihood_grid(N=200)
+    likelihood_grid(N=20)
 
     # plt.figure()
     # plt.subplot(2,1,1)
