@@ -284,10 +284,10 @@ def likelihood_grid(N=500):
     k=0.1
     a_b = 1
 
-    xs = np.linspace(start=0, stop=100, endpoint=False, num=N)
-    fs, ys = Multivariate_GH_1d(xs, omega=1,k=k)
+    # xs = np.linspace(start=0, stop=100, endpoint=False, num=N)
+    # fs, ys = Multivariate_GH_1d(xs, omega=1,k=k,mu=0.0)
 
-    np.savez(f'xy_k01_N{N}.npz', x = np.array(xs), y = np.array(ys))
+    # np.savez(f'xy_k01_N{N}.npz', x = np.array(xs), y = np.array(ys))
 
     file = np.load(f'xy_k01_N{N}.npz')
     xs = np.array(file['x'])
@@ -297,7 +297,7 @@ def likelihood_grid(N=500):
     # grid
     n = 20
     
-    a_bs = np.linspace(0,2,num=n)*a_b
+    a_bs = np.linspace(-1,3,num=n)*a_b
     v_0_sqs = np.linspace(0.5,2,num=n)
     wl_sqs = np.linspace(0.5,2,num=n)
     ks = np.linspace(0.01, 0.2, num=n)
@@ -308,7 +308,7 @@ def likelihood_grid(N=500):
     list_ns = [a_bs, v_0_sqs, wl_sqs, ks, mus, l_sqs, omega_sqs]
 
     # mls = [0,1,2,3,4,5,6]
-    mls=[5,6]
+    mls=[0,1,2]
 
     for m in mls:
         for l in mls:
@@ -319,7 +319,7 @@ def likelihood_grid(N=500):
         
             for i, (row_x , row_y) in enumerate(zip(X, Y)):
                 for j, (x , y) in enumerate(zip(row_x, row_y)):
-                    theta = np.array([a_b, 1.0, 1.0, k, -1.0, 1.0, 1.0])
+                    theta = np.array([a_b, 1.0, 1.0, k, 0.0, 1.0, 1.0])
                     theta[m] = x
                     theta[l] = y
                     likelihoods[i,j] = (logprob(xs, ys, theta, l=theta[-2], p=len(xs), omega=theta[-1]))
@@ -329,7 +329,7 @@ def likelihood_grid(N=500):
             idx = np.unravel_index(idx, likelihoods.shape)
             print(list_paras[m], X[idx], list_paras[l], Y[idx])
             fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
-            surf = ax.plot_surface(X, Y, likelihoods, cmap=cm.coolwarm,
+            surf = ax.plot_surface(X, Y, np.exp(likelihoods), cmap=cm.coolwarm,
                             linewidth=0, antialiased=False)
             ax.set_xlabel(list_paras[m])
             ax.set_ylabel(list_paras[l])
@@ -493,7 +493,7 @@ if __name__ == '__main__':
     # eps_star, eps_n, alphas = dual_averaging(eps0=1e-4)
     # print(eps_star)
 
-    likelihood_grid(N=20)
+    likelihood_grid(N=100)
 
     # plt.figure()
     # plt.subplot(2,1,1)

@@ -4,12 +4,8 @@ from scipy import special
 import jax
 
 from jax import custom_vjp, lax
-import jax.numpy as jnp
 import scipy.special
 
-import jax
-import jax.numpy as jnp
-import scipy.special
 from jax.experimental import io_callback
 
 def kn_io(v, x):
@@ -225,7 +221,7 @@ def logprob(x, f, theta,  l: float, p: int, omega: float):
     sign, logdet = np.linalg.slogdet(K)
     
     logp = (l - p/2)/2 * ( np.log(omega + deltaf) - np.log(omega + bKb) )\
-        + jnp.log(kn_io( l-p/2,  jnp.sqrt((omega + deltaf)*(omega + bKb)))) \
+        + log_kn_large_order( l-p/2,  np.sqrt((omega + deltaf)*(omega + bKb))) \
         - logdet*sign/2  - np.log(special.kv(l, omega))+ (f-mu) @ invK @beta # - p/2* np.log(2*np.pi) # + (log_kn_large_order(l-p/2,  np.sqrt((omega + deltaf)*(omega + bKb))))   \
         # - len(x)* (v_0_sq-1)**2/2 - v_0/2 # add a prior to prevent overfitting
         # + jnp.log(kn_io( l-p/2,  jnp.sqrt((omega + deltaf)*(omega + bKb))))\ using an approximation cos order too large
