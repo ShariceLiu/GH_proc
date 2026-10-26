@@ -137,19 +137,61 @@ def mu_beta_sigma_fn(train_xs, train_ys, x, l=-1, omega=1, w=1, v_0=10, a_b=1, b
     
 
     l21 = l - n / 2
-    # invK11 = torch.linalg.inv(K11)
-    invK11 = torch.linalg.solve(K11, I) # TODO: solve this gives negative K221: tensor(4373.6427, dtype=torch.float64) tensor(0.2771, dtype=torch.float64) 0.1
 
-    gamma21 = omega + train_ys @ (invK11 @ train_ys)
-    delta21 = omega + beta1 @ (invK11 @ beta1)
-    mu21 = K12.T @ invK11 @ train_ys
-    K221 = K22 - K12.T @ invK11 @ K12
-    beta21 = beta2 - K12.T @ invK11 @ beta1
+    # invK11 = torch.linalg.inv(K11)
+    # invK11 = torch.linalg.solve(K11, I) # TODO: solve this gives negative K221: tensor(4373.6427, dtype=torch.float64) tensor(0.2771, dtype=torch.float64) 0.1
+    # gamma21 = omega + train_ys @ (invK11 @ train_ys)
+    # delta21 = omega + beta1 @ (invK11 @ beta1)
+    # mu21 = K12.T @ invK11 @ train_ys
+    # K221 = K22 - K12.T @ invK11 @ K12
+    # beta21 = beta2 - K12.T @ invK11 @ beta1
+
+
+    # K11 should be symmetric
+    K11 = 0.5 * (K11 + K11.T)
+
+    # robust jitter: scale it to the matrix size
+    jitter = 1e-4 * K11.diag().mean()
+    K11 = K11 + jitter * torch.eye(K11.shape[0], device=K11.device, dtype=K11.dtype)
+
+    L = torch.linalg.cholesky(K11)  # (n,n), lower-triangular
+
+    # v = L^{-1} K12   (triangular solve)
+    v = torch.linalg.solve_triangular(L, K12, upper=False)
+
+    # Schur complement: K22 - ||v||^2
+    K221 = K22 - (v.T @ v)   # (m,m); for scalar x this is (1,1)
+    # optional tiny clamp only if it's like -1e-12:
+    K221 = 0.5 * (K221 + K221.T)
+
+    if K221 < 0:
+        print(K221)
+        K221 = 1e-4
+
+
+    # --- ensure column vectors for clean algebra ---
+    y = train_ys.reshape(-1, 1)     # (n,1)
+    b1 = beta1.reshape(-1, 1)       # (n,1)
+    # K11^{-1} y and K11^{-1} beta1 (stable)
+    alpha_y = torch.cholesky_solve(y, L)    # (n,1)
+    alpha_b = torch.cholesky_solve(b1, L)   # (n,1)
+
+    # gamma21 = omega + y^T K11^{-1} y
+    gamma21 = omega + (y.T @ alpha_y).squeeze()
+
+    # delta21 = omega + beta1^T K11^{-1} beta1
+    delta21 = omega + (b1.T @ alpha_b).squeeze()
+
+    # mu21 = K12^T K11^{-1} y
+    mu21 = (K12.T @ alpha_y)  # (m,1) ; if x is scalar, (1,1)
+
+    # beta21 = beta2 - K12^T K11^{-1} beta1
+    beta2_col = beta2.reshape(-1, 1)  # (m,1) if needed
+    beta21 = beta2_col - (K12.T @ alpha_b)  # (m,1)
 
     omega21 = gamma21 * delta21
 
-    if K221 < 0:
-        import pdb; pdb.set_trace()
+    
 
     return mu21.squeeze(), beta21.squeeze(), K221.squeeze(), l21, omega21
 
@@ -545,7 +587,7 @@ def bayesian_optimization_multistart(runs=50, m0 = 6.0, iterations=200, n_starts
     # prev_x = torch.tensor([m0])
     # x = (m0 + 0.1 * torch.randn(1))
     # xs = torch.tensor([6.0000, 9.8492, 5.9548, 6.1307, 6.4322, 6.2060])
-    xs = torch.tensor([m0,  10.0000,  9.5226,  5.0000,  5.9548,  5.8040,  6.1307])
+    xs = torch.tensor([m0])
     ys = tgt_fn(xs)
     f_best = torch.min(ys)
     print(f_best)
@@ -920,7 +962,8 @@ if __name__ == '__main__':
     # plt.savefig('figure/bayesian/tgt.png')
     
     
-    bayOpwrap(model='gh', runs=15, cov='mat', sampling='hmc', k=0.1, plot=False)
+    # bayOpwrap(model='g', runs=20, cov='mat', sampling='hmc', k=0.1, plot=False, m0=6)
+    bayOpwrap(model='gh', runs=20, cov='mat', sampling='hmc', k=0.1, plot=False, m0=float(6))
 
     # actual_min()
     
@@ -957,6 +1000,6 @@ if __name__ == '__main__':
 
 
     # xis = torch.linspace(5,10, steps=200 )
-    # for i, xi in enumerate(xis):
-    mi,betai, vi,li,omegai = mu_beta_sigma_fn(xs, ys, x=6.0050, cov=cov, l=1, omega=1, k=k,
-                                                            w=torch.exp(torch.tensor(-0.5850)), v_0=torch.exp(torch.tensor(7.7672)), a_b=-0.4632)
+    # for i, xi in enumerate(xis):  # tensor(4373.6427, dtype=torch.float64) tensor(0.2771, dtype=torch.float64) 0.1
+    # mi,betai, vi,li,omegai = mu_beta_sigma_fn(xs, ys, x=6.0050, cov=cov, l=1, omega=1, k=k,
+    #                                                         w=torch.tensor(0.2771), v_0=torch.tensor(4373.6427), a_b=0.1)

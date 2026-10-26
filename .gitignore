@@ -1,0 +1,29 @@
+# Downloaded datasets and simulated data
+/data/
+
+# Generated figures, predictions, samples, and experiment reports
+/figure/
+/bo_figure/
+
+# NumPy data archives (including xy*.npz in the repository root)
+*.npz
+*.npy
+
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local virtual environments and vendored dependencies
+.venv/
+venv/
+_vendor/
+
+# Local editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

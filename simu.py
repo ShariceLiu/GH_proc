@@ -7,7 +7,7 @@ m = 20
 l_lgs = np.linspace(0,5,num=n, endpoint=False)
 omg_lgs = np.linspace(0,2,num=n, endpoint=False)
 omega = 1
-l = 10
+l = 1
 plt.figure()
 for om_lg in omg_lgs:
     omega = np.exp(om_lg)
